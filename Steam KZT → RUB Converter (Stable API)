@@ -1,0 +1,69 @@
+// ==UserScript==
+// @name         Steam KZT → RUB Converter (Stable API)
+// @namespace    http://tampermonkey.net/
+// @version      1.4
+// @description  Steam KZT → RUB с динамическим API, всегда работает корректно
+// @author       Ты
+// @match        https://store.steampowered.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+  'use strict';
+  const RUB_MARKER = " (~";
+  let KZT_TO_RUB = null;
+  const ACCESS_KEY = "0dd78cddca06c2e4b15e40a4fd15fbc5";
+  const API_URL = `https://api.exchangerate.host/convert?from=KZT&to=RUB&amount=1&access_key=${ACCESS_KEY}`;
+
+  function convertTextNode(node) {
+      if (node.nodeValue.includes(RUB_MARKER) || !KZT_TO_RUB) return;
+      const regex = /(\d{1,3}(?:[ \u00A0]\d{3})*(?:[\.,]\d+)?|\d+[\.,]?\d*)\s*₸/g;
+      node.nodeValue = node.nodeValue.replace(regex, (match, number) => {
+          const cleanNum = number.replace(/[\u00A0 ]/g, '').replace(',', '.');
+          const value = parseFloat(cleanNum);
+          if (isNaN(value)) return match;
+          const rub = Math.round(value * KZT_TO_RUB);
+          return `${number}₸ (~${rub}₽)`;
+      });
+  }
+
+  function walkAndConvert(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+          if (node.nodeValue && node.nodeValue.includes("₸")) convertTextNode(node);
+      } else {
+          for (const child of node.childNodes) {
+              walkAndConvert(child);
+          }
+      }
+  }
+
+  function scan() {
+      walkAndConvert(document.body);
+  }
+
+  // Получаем курс, только потом запускаем обработку!
+  fetch(API_URL)
+      .then(r => r.json())
+      .then(data => {
+          KZT_TO_RUB = (
+              data && (typeof data.result === 'number')
+                ? data.result
+                : (data.info && data.info.quote)
+          );
+          if (!KZT_TO_RUB) {
+            // если курс снова не получился — fallback на хардкод
+            KZT_TO_RUB = 0.15185;
+          }
+          scan();
+          // observer тоже только после загрузки курса
+          const observer = new MutationObserver(scan);
+          observer.observe(document.body, { childList: true, subtree: true });
+      })
+      .catch(() => {
+          // if API unavailable — fallback to hardcoded value
+          KZT_TO_RUB = 0.15185;
+          scan();
+          const observer = new MutationObserver(scan);
+          observer.observe(document.body, { childList: true, subtree: true });
+      });
+})();
