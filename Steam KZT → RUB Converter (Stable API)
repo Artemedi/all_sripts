@@ -1,9 +1,8 @@
 // ==UserScript==
-// @name         Steam KZT → RUB Converter (Stable API)
+// @name         Steam KZT → RUB Converter with Lazy Load
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Steam KZT → RUB с динамическим API, всегда работает корректно
-// @author       Ты
+// @version      1.5
+// @description  Steam KZT → RUB, работает с подгружаемым содержимым в ленте (wishlist, каталоги и пр.)
 // @match        https://store.steampowered.com/*
 // @grant        none
 // ==/UserScript==
@@ -12,7 +11,7 @@
   'use strict';
   const RUB_MARKER = " (~";
   let KZT_TO_RUB = null;
-  const ACCESS_KEY = "0dd78cddca06c2e4b15e40a4fd15fbc5";
+  const ACCESS_KEY = "";
   const API_URL = `https://api.exchangerate.host/convert?from=KZT&to=RUB&amount=1&access_key=${ACCESS_KEY}`;
 
   function convertTextNode(node) {
@@ -31,8 +30,8 @@
       if (node.nodeType === Node.TEXT_NODE) {
           if (node.nodeValue && node.nodeValue.includes("₸")) convertTextNode(node);
       } else {
-          for (const child of node.childNodes) {
-              walkAndConvert(child);
+          for (let i = 0; i < node.childNodes.length; i++) {
+              walkAndConvert(node.childNodes[i]);
           }
       }
   }
@@ -41,29 +40,40 @@
       walkAndConvert(document.body);
   }
 
-  // Получаем курс, только потом запускаем обработку!
   fetch(API_URL)
-      .then(r => r.json())
-      .then(data => {
-          KZT_TO_RUB = (
-              data && (typeof data.result === 'number')
+    .then(r => r.json())
+    .then(data => {
+        KZT_TO_RUB = (
+            data && (typeof data.result === 'number')
                 ? data.result
                 : (data.info && data.info.quote)
-          );
-          if (!KZT_TO_RUB) {
-            // если курс снова не получился — fallback на хардкод
-            KZT_TO_RUB = 0.15185;
-          }
-          scan();
-          // observer тоже только после загрузки курса
-          const observer = new MutationObserver(scan);
-          observer.observe(document.body, { childList: true, subtree: true });
-      })
-      .catch(() => {
-          // if API unavailable — fallback to hardcoded value
-          KZT_TO_RUB = 0.15185;
-          scan();
-          const observer = new MutationObserver(scan);
-          observer.observe(document.body, { childList: true, subtree: true });
-      });
+        );
+        if (!KZT_TO_RUB) KZT_TO_RUB = 0.15185;
+
+        scan();
+
+        // MutationObserver — слежение за изменениями
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach(mutation => {
+                if (mutation.addedNodes && mutation.addedNodes.length) {
+                    mutation.addedNodes.forEach(walkAndConvert);
+                }
+            });
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+
+        // EXTRA: раз в 2 секунды сканируем всю страницу (на случай, если observer что-то не заметил)
+        setInterval(scan, 2000);
+    })
+    .catch(() => {
+        // fallback на захардкоженный курс
+        KZT_TO_RUB = 0.15185;
+        scan();
+        setInterval(scan, 2000);
+    });
+
 })();
